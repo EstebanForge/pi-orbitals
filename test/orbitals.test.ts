@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -18,8 +18,12 @@ import { buildPrompt, discoverAgentsMd } from "../extensions/orbitals/jobs.ts";
 import { getProfile } from "../extensions/orbitals/profiles.ts";
 import {
   extractJobIdFromText,
-  normalizeHookEvent,
+  buildClaudeHookSettings,
+  buildCodexHooksConfig,
+  buildAgyHooksConfig,
+  readHookEvents,
 } from "../extensions/orbitals/hooks.ts";
+import { spawnSync } from "node:child_process";
 
 function tempHome(): string {
   return mkdtempSync(path.join(os.tmpdir(), "orbit-test-"));
@@ -141,30 +145,78 @@ test("extractJobIdFromText finds an orbit job id", () => {
   assert.equal(extractJobIdFromText("nothing here"), undefined);
 });
 
-test("normalizeHookEvent maps claude/codex shape", () => {
-  const event = normalizeHookEvent("claude", {
-    hook_event_name: "PostToolUse",
-    tool_name: "Bash",
-    tool_input: { command: "npm test" },
-    tool_response: { ok: true },
-    session_id: "s1",
-    cwd: "/repo",
-  });
-  assert.equal(event.hookEventName, "PostToolUse");
-  assert.equal(event.toolName, "Bash");
-  assert.equal(event.sessionId, "s1");
-  assert.equal(event.cwd, "/repo");
+test("claude hook settings.json includes lifecycle + tool hooks", () => {
+  const home = tempHome();
+  try {
+    const result = buildClaudeHookSettings({ home, name: "demo" });
+    assert.ok(existsSync(result.configPath));
+    const parsed = JSON.parse(readFileSync(result.configPath, "utf8"));
+    assert.ok(parsed.hooks.PreToolUse);
+    assert.ok(parsed.hooks.PostToolUse);
+    assert.ok(parsed.hooks.Stop);
+    assert.ok(parsed.hooks.UserPromptSubmit);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
-test("normalizeHookEvent maps agy toolCall shape", () => {
-  const event = normalizeHookEvent("agy", {
-    hook_event_name: "PreToolUse",
-    toolCall: { name: "run_command", args: { CommandLine: "ls" } },
-    conversationId: "c1",
-  });
-  assert.equal(event.toolName, "run_command");
-  assert.deepEqual(event.toolInput, { CommandLine: "ls" });
-  assert.equal(event.sessionId, "c1");
+test("codex hook config adds the hook-trust bypass flag", () => {
+  const home = tempHome();
+  const project = mkdtempSync(path.join(os.tmpdir(), "orbit-codex-"));
+  try {
+    const result = buildCodexHooksConfig({ home, scope: "project", projectDir: project });
+    assert.deepEqual(result.extraLaunchArgs, ["--dangerously-bypass-hook-trust"]);
+    assert.ok(existsSync(result.configPath));
+    const parsed = JSON.parse(readFileSync(result.configPath, "utf8"));
+    assert.ok(parsed.hooks.PreToolUse);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("agy hook config writes a named recorder group", () => {
+  const home = tempHome();
+  const project = mkdtempSync(path.join(os.tmpdir(), "orbit-agy-"));
+  try {
+    const result = buildAgyHooksConfig({ home, scope: "project", projectDir: project });
+    assert.equal(result.scope, "project");
+    const parsed = JSON.parse(readFileSync(result.configPath, "utf8"));
+    assert.ok(parsed["orbit-recorder"].PreToolUse);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("recorder subprocess attributes + normalizes events across agents", () => {
+  const home = tempHome();
+  const recorder = path.resolve("bin", "orbit-hook.mjs");
+  const jobId = "33333333-3333-4333-8333-333333333333";
+  const run = (payload: object, agent: string) =>
+    spawnSync(process.execPath, [recorder, "--home", home], {
+      input: JSON.stringify(payload),
+      env: { ...process.env, ORBIT_HOOK_AGENT: agent },
+      encoding: "utf8",
+    });
+  try {
+    // bind session s1 -> job via the prompt text
+    run({ hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: `orbit job ${jobId}` }, "claude");
+    // same session, no prompt -> auto-attributed, tool fields normalized (claude shape)
+    run({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "ls" } }, "claude");
+    // agy toolCall shape, same conversationId
+    run({ hook_event_name: "PreToolUse", conversationId: "s1", toolCall: { name: "run_command", args: { CommandLine: "pwd" } } }, "agy");
+
+    const page = readHookEvents(jobId, { home });
+    assert.equal(page.events.length, 3);
+    const [a, b, c] = page.events as any[];
+    assert.equal(a.hookEventName, "UserPromptSubmit");
+    assert.equal(b.toolName, "Bash");
+    assert.equal(c.toolName, "run_command"); // agy toolCall.name normalized
+    assert.equal(c.toolInput.CommandLine, "pwd");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("discoverAgentsMd walks parent to child", () => {

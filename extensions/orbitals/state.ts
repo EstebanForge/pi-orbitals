@@ -62,6 +62,10 @@ export interface SessionRecord {
   updatedAt: string;
   model: string;
   reused: boolean;
+  /** Whether the orbit hook recorder is enabled for this session. */
+  hooksEnabled?: boolean;
+  /** Path to the agent-specific hook config file, if any. */
+  hookConfigPath?: string;
 }
 
 export interface OrbitState {

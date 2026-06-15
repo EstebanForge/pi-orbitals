@@ -34,6 +34,7 @@ import {
 import { getProfile, defaultModel } from "./profiles.ts";
 import type { LaunchOptions } from "./profiles.ts";
 import type { AgentProfile } from "./profiles.ts";
+import { buildHookConfig } from "./hooks.ts";
 
 export { getSession, getJob };
 
@@ -46,6 +47,14 @@ export interface StartOptions {
   extraArgs?: string[];
   /** Auto-import AGENTS.md files (default true; no-op for native agents). */
   agentsMd?: boolean;
+  /**
+   * Enable the orbit hook recorder for structured lifecycle/tool events. Default
+   * per agent: claude true (per-session --settings, isolated), codex/agy false
+   * (project-local config files have repo side-effects; opt in).
+   */
+  hooks?: boolean;
+  /** Scope for codex/agy hook config: "project" (default) writes into cwd, "user" writes to ~/. */
+  hookScope?: "project" | "user";
 }
 
 export interface SendOptions {
@@ -120,10 +129,28 @@ export function startSession(options: StartOptions): SessionRecord {
       ? { files: [] as string[] }
       : prepareAgentsContext({ cwd, name, home });
 
+  // Hook recorder config (structured events). Default per agent; opt-out via
+  // hooks:false. claude uses an isolated per-session settings.json; codex/agy
+  // write project-local config files (repo side-effect) unless scope is "user".
+  const hooksEnabled = options.hooks ?? (profile.id === "claude");
+  let hookConfigPath: string | undefined;
+  const launchExtraArgs = [...(options.extraArgs ?? [])];
+  if (hooksEnabled) {
+    const hook = buildHookConfig(profile.id, {
+      home,
+      name,
+      projectDir: cwd,
+      scope: options.hookScope ?? "project",
+    });
+    hookConfigPath = hook.configPath;
+    if (hook.extraLaunchArgs) launchExtraArgs.push(...hook.extraLaunchArgs);
+  }
+
   const launchOpts: LaunchOptions = {
     model,
     agentsPromptPath: agentsContext.promptPath,
-    extraArgs: options.extraArgs,
+    settingsPath: profile.id === "claude" ? hookConfigPath : undefined,
+    extraArgs: launchExtraArgs.length ? launchExtraArgs : undefined,
   };
   const command = profile.launch(launchOpts);
 
@@ -155,6 +182,8 @@ export function startSession(options: StartOptions): SessionRecord {
     updatedAt: now,
     model,
     reused,
+    hooksEnabled,
+    hookConfigPath,
   };
   state.sessions[name] = record;
   saveState(state, home);

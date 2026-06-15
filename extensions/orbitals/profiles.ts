@@ -8,6 +8,8 @@ export interface LaunchOptions {
   model: string;
   /** Path to a combined AGENTS.md prompt file (only used when agentsMd === "inject"). */
   agentsPromptPath?: string;
+  /** Path to a Claude Code settings.json (hooks). Passed via --settings. */
+  settingsPath?: string;
   /** Extra raw args to append after the built ones. */
   extraArgs?: string[];
 }
@@ -50,6 +52,7 @@ const CLAUDE_PROFILE: AgentProfile = {
   launch: (opts) => {
     const argv = ["claude", "--model", opts.model, "--dangerously-skip-permissions"];
     if (opts.agentsPromptPath) argv.push("--append-system-prompt-file", opts.agentsPromptPath);
+    if (opts.settingsPath) argv.push("--settings", opts.settingsPath);
     if (opts.extraArgs) argv.push(...opts.extraArgs);
     return argv.map(shellQuote).join(" ");
   },

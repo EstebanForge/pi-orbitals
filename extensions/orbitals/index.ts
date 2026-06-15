@@ -8,6 +8,7 @@ import {
   startSession,
   steerSession,
 } from "./jobs.ts";
+import { readHookEvents } from "./hooks.ts";
 import { knownAgents } from "./profiles.ts";
 
 const AGENT_VALUES = knownAgents();
@@ -197,6 +198,27 @@ export default function orbitalsExtension(pi: ExtensionAPI): void {
       } catch (error) {
         return toolError(error, { session: params.session });
       }
+    },
+  });
+  // Tool: orbit_events
+  pi.registerTool({
+    name: "orbit_events",
+    label: "Read peer agent hook events",
+    description:
+      "Read structured lifecycle/tool events (PreToolUse, PostToolUse, Stop, ...) recorded by the orbit hook recorder for a job. Requires hooks to be enabled on the session. Returns events since the given offset.",
+    parameters: Type.Object({
+      job: Type.String({ description: "Orbit job id (from orbit_send result)." }),
+      offset: Type.Optional(Type.Number({ description: "Byte offset to read from (for pagination). Default 0." })),
+    }),
+    async execute(_toolCallId, params) {
+      const page = readHookEvents(params.job, { offset: params.offset });
+      const summary = page.events
+        .map((e: any) => `${e.hookEventName}${e.toolName ? `:${e.toolName}` : ""}`)
+        .join(", ");
+      return {
+        content: [text(page.events.length ? `${page.events.length} events: ${summary}` : "No events recorded.")],
+        details: { count: page.events.length, nextOffset: page.nextOffset, events: page.events },
+      };
     },
   });
 }
