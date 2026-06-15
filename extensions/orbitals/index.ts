@@ -10,6 +10,7 @@ import {
 } from "./jobs.ts";
 import { readHookEvents } from "./hooks.ts";
 import { knownAgents } from "./profiles.ts";
+import { registerProvider } from "./provider.ts";
 
 const AGENT_VALUES = knownAgents();
 
@@ -27,6 +28,9 @@ function toolError(error: unknown, details: Record<string, unknown>): AgentToolR
 }
 
 export default function orbitalsExtension(pi: ExtensionAPI): void {
+  // Provider: expose claude/codex/agy as Pi models (orbitals/claude etc.).
+  registerProvider(pi);
+
   // Tool: orbit_start
   pi.registerTool({
     name: "orbit_start",
