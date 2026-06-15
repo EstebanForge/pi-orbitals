@@ -1,10 +1,10 @@
 # @estebanforge/pi-orbitals
 
-Pi extension that drives **claude**, **codex**, and **agy** (Antigravity) as **interactive tmux sessions**, instead of spawning them in headless print mode.
+Pi extension to drive **claude**, **codex**, and **agy** (Antigravity) as **interactive tmux sessions**.
 
 Interactive TUI mode rides the flat subscription quota. Headless `-p` mode bills per-token against API quota and gets throttled. pi-orbitals keeps each peer agent running in a durable tmux pane and drives it with `tmux` keystrokes, so delegated peer turns do not incur `-p` costs.
 
-> Status: Phase 1 (agent-agnostic delegation). Provider + hook-bridge land in later phases. See [PLAN.md](./PLAN.md).
+> Status: Phase 1 (agent-agnostic delegation) and Phase 2 (hook bridge / structured events) are done and verified. Pi provider lands later. See [PLAN.md](./PLAN.md).
 
 ## Install
 
