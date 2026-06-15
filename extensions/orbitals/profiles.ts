@@ -40,6 +40,9 @@ export function defaultModel(id: AgentId): string {
   return map[id];
 }
 
+// CLAUDE smoke (2026-06-15, Sonnet 4.6):
+//   trust prompt on first run -> press Enter (❯ pre-selects "Yes, I trust this folder").
+//   idle: input box "❯ " + footer "bypass permissions on".
 const CLAUDE_PROFILE: AgentProfile = {
   id: "claude",
   agentsMd: "inject",
@@ -57,6 +60,11 @@ const CLAUDE_PROFILE: AgentProfile = {
   interruptKey: "Escape",
 };
 
+// CODEX smoke (2026-06-15, gpt-5.5 low, codex-cli 0.140.0):
+//   blank screen until the TUI paints (slow startup / needs a moment); wait for the
+//   status footer "<model> low · <cwd>" before pasting, else input is swallowed.
+//   "permissions: YOLO mode" confirms --dangerously-bypass-approvals-and-sandbox works.
+//   rate-limit / model-switch dialogs appear as interactive prompts (Enter/Esc).
 const CODEX_PROFILE: AgentProfile = {
   id: "codex",
   agentsMd: "native",
@@ -70,12 +78,17 @@ const CODEX_PROFILE: AgentProfile = {
     if (opts.extraArgs) argv.push(...opts.extraArgs);
     return argv.map(shellQuote).join(" ");
   },
-  // codex TUI prompt. Verified against installed build; refine in smoke.
-  idlePattern: />\s*$|waiting for input|what next/i,
-  trustPattern: /trust this (project|folder)|yes,? i (do|trust)/i,
+  // codex TUI: input prompt "›" and status footer "<model> low · <cwd>".
+  idlePattern: /›\s*$|gpt-[0-9.]+ .*· .+\//i,
+  // codex rate-limit / model-switch confirmation dialogs.
+  trustPattern: /Press enter to confirm or esc to go back|Switch to .+ for lower credit/i,
   interruptKey: "C-c",
 };
 
+// AGY smoke (2026-06-15, Gemini 3.5 Flash Low):
+//   IMPORTANT: agy auto-runs the AGENTS.md workflow on startup (e.g. mcp-cli-ent)
+//   instead of sitting idle. Escape interrupts the autonomous turn -> idle input ">".
+//   --dangerously-skip-permissions does NOT suppress command-approval prompts.
 const AGY_PROFILE: AgentProfile = {
   id: "agy",
   agentsMd: "native",
@@ -84,10 +97,11 @@ const AGY_PROFILE: AgentProfile = {
     if (opts.extraArgs) argv.push(...opts.extraArgs);
     return argv.map(shellQuote).join(" ");
   },
-  // agy (Antigravity) prompt. Refine in smoke.
-  idlePattern: />\s*$|ready for input/i,
-  trustPattern: /trust this (workspace|folder)|yes,? i (do|trust)/i,
-  interruptKey: "C-c",
+  // agy (Antigravity) idle input prompt ">" with "? for shortcuts" footer.
+  idlePattern: />\s*$|\? for shortcuts/i,
+  // agy command-approval / trust dialogs.
+  trustPattern: /Do you want to proceed\?|trust this (workspace|folder)|yes,? i (do|trust)/i,
+  interruptKey: "Escape",
 };
 
 const PROFILES: Record<AgentId, AgentProfile> = {
