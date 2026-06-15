@@ -1,0 +1,56 @@
+{
+  "name": "@estebanforge/pi-orbitals",
+  "version": "0.1.0",
+  "description": "Pi extension: drive claude, codex, and agy as interactive tmux sessions (peer agents on subscription quota, no headless -p billing).",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "tmux",
+    "claude-code",
+    "codex",
+    "antigravity",
+    "agent-orchestration"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EstebanForge/pi-orbitals.git"
+  },
+  "type": "module",
+  "files": [
+    "extensions",
+    "bin",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/orbitals"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "^22.0.0",
+    "typebox": "*",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "smoke": "pi -e . --list-models"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
