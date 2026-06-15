@@ -16,11 +16,10 @@ extensions/orbitals/
   tmux.ts         # tmux driver (functional, agent-agnostic)
   jobs.ts         # Job + completion protocol (ORBIT_DONE marker + done.json)
   state.ts        # state.json + logs + session locks
-  hooks.ts        # Hook config generators + event normalizer (p2)
-  provider.ts     # Pi provider + agent->Pi tool bridge (p3)
+  hooks.ts        # Hook config generators + event reader (p2)
+  provider.ts     # Pi provider: route model calls to peer agents (p3)
 bin/
   orbit-hook.mjs  # Standalone hook recorder, self-contained (p2)
-  orbit-pi-tool.mjs # agent->Pi tool RPC, self-contained (p3)
 test/
   *.test.ts       # node:test (--experimental-strip-types)
 ```
