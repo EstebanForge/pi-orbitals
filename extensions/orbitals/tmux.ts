@@ -79,9 +79,10 @@ export function pipePane(tmuxSession: string, logPath: string): void {
   tmux(["pipe-pane", "-o", "-t", tmuxSession, `cat >> ${shellQuote(logPath)}`]);
 }
 
-/** Clear the pane and its scrollback history (avoids stale marker matches). */
+/** Clear the pane's scrollback history. Avoids stale marker matches. */
 export function clearHistory(tmuxSession: string): void {
-  tmux(["send-keys", "-t", tmuxSession, "C-l"], { allowFailure: true });
+  // tmux-level only; do NOT send C-l (agents' TUIs intercept it and it does
+  // not clear scrollback anyway). clear-history wipes the saved pane history.
   tmux(["clear-history", "-t", tmuxSession], { allowFailure: true });
 }
 
@@ -117,52 +118,34 @@ export interface PasteResult {
 }
 
 /**
- * Paste a prompt file into the session with bracketed paste, verify it is
- * visible (by the injected `orbit job <signature>` line), retry (line-kill
- * with C-u) if tmux drops it, then submit with C-m.
- * Mirrors ccmux's paste-buffer reliability. `signature` is the job id, which
- * buildPrompt always injects as `orbit job <id>`, so it is a reliable presence
- * check.
+ * Paste a prompt file into the session and submit it.
+ *
+ * Uses bracketed paste (`-p`) + submit (`C-m`). No pre-submit visibility check:
+ * Claude Code collapses bracketed pastes into a `[Pasted text #N]` chip, so the
+ * literal prompt text is not visible in the pane and a signature check would
+ * always fail. The paste reliably delivers content (the chip proves it);
+ * completion reliability comes from waitForJob (idle/marker/done-file), which
+ * catches a genuinely dropped paste via timeout. An optional small settle delay
+ * lets slower TUIs (codex) ingest the paste before submit.
  */
 export function pastePromptFile(
   tmuxSession: string,
   promptPath: string,
-  signature: string,
-  options: { maxAttempts?: number; pasteDelayMs?: number } = {},
+  _signature: string,
+  options: { settleMs?: number } = {},
 ): PasteResult {
   const bufferName = `orbit-${path.basename(promptPath, ".txt")}`;
-  tmux(["load-buffer", "-b", bufferName, promptPath]);
   const promptBytes = statSync(promptPath).size;
-  const defaultDelay = Math.min(5000, Math.max(500, Math.ceil(promptBytes / 4)));
-  const pasteDelayMs = options.pasteDelayMs ?? defaultDelay;
-  const maxAttempts = options.maxAttempts ?? 3;
-  const needle = new RegExp(`orbit job ${escapeForRegExp(signature)}`, "i");
-  let attempts = 0;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    attempts = attempt;
-    // -p bracketed paste, -r no newline conversion, -b named buffer.
+  const settleMs = options.settleMs ?? Math.min(3000, Math.max(300, Math.ceil(promptBytes / 8)));
+  tmux(["load-buffer", "-b", bufferName, promptPath]);
+  try {
     tmux(["paste-buffer", "-p", "-r", "-b", bufferName, "-t", tmuxSession]);
-    sleepSync(pasteDelayMs);
-    const visible = capturePaneClean(tmuxSession, { lines: 120 });
-    if (needle.test(visible)) {
-      tmux(["delete-buffer", "-b", bufferName], { allowFailure: true });
-      tmux(["send-keys", "-t", tmuxSession, "C-m"]);
-      return { ok: true, attempts };
-    }
-    if (attempt < maxAttempts) {
-      tmux(["send-keys", "-t", tmuxSession, "C-u"]);
-      sleepSync(500);
-    }
+    sleepSync(settleMs);
+    tmux(["send-keys", "-t", tmuxSession, "C-m"]);
+    return { ok: true, attempts: 1 };
+  } finally {
+    tmux(["delete-buffer", "-b", bufferName], { allowFailure: true });
   }
-  tmux(["delete-buffer", "-b", bufferName], { allowFailure: true });
-  throw new OrbitError(
-    `Pasted prompt was not visible in tmux pane after ${attempts} attempt(s)`,
-    { tmuxSession, promptPath, signature },
-  );
-}
-
-function escapeForRegExp(value: string): string {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Send a raw keystroke (C-c, C-d, Escape, etc.). */

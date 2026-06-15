@@ -29,9 +29,11 @@ import {
   startTmuxSession,
   assertTmuxAvailable,
   capturePaneClean,
+  sendKeys,
 } from "./tmux.ts";
 import { getProfile, defaultModel } from "./profiles.ts";
 import type { LaunchOptions } from "./profiles.ts";
+import type { AgentProfile } from "./profiles.ts";
 
 export { getSession, getJob };
 
@@ -133,6 +135,14 @@ export function startSession(options: StartOptions): SessionRecord {
   }
   pipePane(tmuxSession, logPath);
 
+  // Groom the freshly launched (or reused) session to a clean input-ready
+  // state before returning: accept claude trust prompts, dismiss codex
+  // rate-limit dialogs, interrupt agy autonomous startup. Best-effort; a
+  // timeout here is non-fatal (sendJob re-grooms before pasting).
+  prepareSessionForInput(profile, tmuxSession, {
+    timeoutMs: Number(process.env.ORBIT_READY_TIMEOUT_MS ?? 45_000),
+  });
+
   const now = new Date().toISOString();
   const record: SessionRecord = {
     name,
@@ -160,6 +170,62 @@ export function killOrbitSession(name: string, home: string = DEFAULT_HOME): { k
   return { killed, session };
 }
 
+/**
+ * Groom a peer agent pane to a clean input-ready state before pasting a prompt.
+ * Per-agent handling, derived from real smoke captures (2026-06-15):
+ *  - any dialog with a pre-selected confirm option + "enter to confirm" -> C-m
+ *  - any "esc to go back" / rate-limit model-switch dialog -> Escape (dismiss)
+ *  - agy runs the AGENTS.md workflow on startup; if non-idle with no dialog,
+ *    send Escape once to interrupt the autonomous turn.
+ * Returns when the profile idlePattern matches, or throws on timeout.
+ * Best-effort: a leftover dialog is non-fatal because sendJob re-runs this.
+ */
+export function prepareSessionForInput(
+  profile: AgentProfile,
+  tmuxSession: string,
+  options: { timeoutMs?: number; pollMs?: number } = {},
+): { ready: boolean; acceptedDialogs: number; interrupted: boolean } {
+  const timeoutMs = options.timeoutMs ?? 45_000;
+  const pollMs = options.pollMs ?? 800;
+  const started = Date.now();
+  let acceptedDialogs = 0;
+  let interrupted = false;
+
+  while (Date.now() - started < timeoutMs) {
+    if (!sessionExists(tmuxSession)) {
+      throw new OrbitError(`tmux session ${tmuxSession} died during readiness check`);
+    }
+    const text = capturePaneClean(tmuxSession, { lines: 160 });
+
+    // 1. Trust / approval dialog with a pre-selected Yes -> confirm with Enter.
+    if (profile.trustPattern.test(text)) {
+      sendKeys(tmuxSession, "C-m");
+      acceptedDialogs += 1;
+      sleepSync(2500);
+      continue;
+    }
+    // 2. Dismissable rate-limit / model-switch dialog ("esc to go back").
+    if (/esc to go back|esc to cancel/i.test(text)) {
+      sendKeys(tmuxSession, "Escape");
+      sleepSync(1500);
+      continue;
+    }
+    // 3. Idle input-ready -> done.
+    if (profile.idlePattern.test(text)) {
+      return { ready: true, acceptedDialogs, interrupted };
+    }
+    // 4. agy autonomous startup (non-idle, no dialog) -> interrupt once.
+    if (profile.id === "agy" && !interrupted) {
+      sendKeys(tmuxSession, "Escape");
+      interrupted = true;
+      sleepSync(2000);
+      continue;
+    }
+    sleepSync(pollMs);
+  }
+  return { ready: false, acceptedDialogs, interrupted };
+}
+
 /** Build the prompt body with the completion protocol appended. */
 export function buildPrompt(opts: {
   task: string;
@@ -170,11 +236,15 @@ export function buildPrompt(opts: {
   const body = String(opts.task || "").trim();
   if (opts.protocol === false) return body;
   const marker = `ORBIT_DONE:${opts.id}`;
+  // Lead with a first-line signature `orbit job <id>`: this is what the TUI
+  // input box displays on its first line, so pastePromptFile's visibility
+  // check (which looks at the visible pane) can confirm the paste landed.
+  // extractJobIdFromText also keys off this line for hook job-id binding.
   return [
+    `orbit job ${opts.id}`,
     body,
     "",
     "<orbit_completion_protocol>",
-    `This request is controlled by pi-orbitals job ${opts.id} (line: orbit job ${opts.id}).`,
     "Do your work, then finish.",
     `When fully done, include one completion marker line in your final response: ${marker}`,
     "Do not add spaces, quotes, or punctuation to the marker line.",
@@ -269,6 +339,12 @@ export function sendJob(
   job: JobRecord,
   home: string = DEFAULT_HOME,
 ): JobRecord {
+  // Re-groom the pane to idle before pasting: clears any leftover trust,
+  // rate-limit, or autonomous-startup state from a prior turn.
+  const profile = getProfile(job.agent);
+  prepareSessionForInput(profile, job.tmuxSession, {
+    timeoutMs: Number(process.env.ORBIT_READY_TIMEOUT_MS ?? 45_000),
+  });
   clearHistory(job.tmuxSession);
   pastePromptFile(job.tmuxSession, job.promptPath, job.id);
   const now = new Date().toISOString();
