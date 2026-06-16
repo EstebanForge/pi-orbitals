@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
   saveState,
   ensureHome,
   acquireSessionLock,
+  sessionLockPath,
 } from "../extensions/orbitals/state.ts";
 import { buildPrompt, discoverAgentsMd } from "../extensions/orbitals/jobs.ts";
 import { getProfile } from "../extensions/orbitals/profiles.ts";
@@ -23,7 +24,7 @@ import {
   buildAgyHooksConfig,
   readHookEvents,
 } from "../extensions/orbitals/hooks.ts";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 
 function tempHome(): string {
   return mkdtempSync(path.join(os.tmpdir(), "orbit-test-"));
@@ -265,4 +266,44 @@ test("discoverAgentsMd walks parent to child", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("acquireSessionLock reclaims an orphaned lock (dead owner)", async () => {
+  const home = tempHome();
+  const name = "orphan";
+  // Spawn a child, kill it, reap -> its pid is now dead (not recycled).
+  const child = spawn("sleep", ["10"], { stdio: "ignore" });
+  const deadPid = child.pid!;
+  child.kill("SIGKILL");
+  await new Promise<void>((res) => child.on("exit", () => res()));
+  const lockFile = sessionLockPath(name, home);
+  writeFileSync(lockFile, String(deadPid));
+  // Stale lock from a dead owner -> pruned and reclaimed, no throw.
+  const release = acquireSessionLock(name, home);
+  assert.equal(readFileSync(lockFile, "utf8"), String(process.pid));
+  release();
+  assert.equal(existsSync(lockFile), false);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test("acquireSessionLock refuses a lock held by a live owner", () => {
+  const home = tempHome();
+  const name = "live";
+  writeFileSync(sessionLockPath(name, home), String(process.pid)); // we are alive
+  assert.throws(() => acquireSessionLock(name, home), /busy/);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test("loadState backs up a corrupt state.json before resetting", () => {
+  const home = tempHome();
+  ensureHome(home);
+  const file = path.join(home, "state.json");
+  writeFileSync(file, "{ not valid json");
+  const state = loadState(home);
+  assert.deepEqual(state, { version: 1, sessions: {}, jobs: {} });
+  // Corrupt file was moved aside (not silently overwritten).
+  const backups = readdirSync(home).filter((f) => f.startsWith("state.json.corrupt."));
+  assert.equal(backups.length, 1);
+  assert.equal(existsSync(file), false);
+  rmSync(home, { recursive: true, force: true });
 });

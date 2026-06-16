@@ -128,17 +128,29 @@ function statePath(home: string = DEFAULT_HOME): string {
   return path.join(ensureHome(home), "state.json");
 }
 
+/** Rename an unparseable state.json aside (state.json.corrupt.<ts>) so it can
+ *  be recovered by hand before a fresh save overwrites it. Best-effort. */
+function backupCorruptState(file: string): void {
+  try {
+    renameSync(file, `${file}.corrupt.${Date.now()}`);
+  } catch {
+    // Cannot move it (vanished, permissions): leave it. A later save may
+    // overwrite, but failing to back up must not crash the extension.
+  }
+}
+
 export function loadState(home: string = DEFAULT_HOME): OrbitState {
   const file = statePath(home);
   if (!existsSync(file)) {
     return { version: STATE_VERSION, sessions: {}, jobs: {} };
   }
   // Corrupt state.json (SIGKILL mid-write, disk error) must not crash the
-  // extension. Fall back to a fresh state rather than propagating.
+  // extension. Back it up for manual recovery, then fall back to a fresh state.
   let parsed: Partial<OrbitState>;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<OrbitState>;
   } catch {
+    backupCorruptState(file);
     return { version: STATE_VERSION, sessions: {}, jobs: {} };
   }
   return {
@@ -214,13 +226,28 @@ export function sessionLockPath(name: string, home: string = DEFAULT_HOME): stri
   return path.join(ensureHome(home), "locks", `${safeName(name)}.lock`);
 }
 
+/** True if a process with the given pid is currently running. signal 0 is an
+ *  existence probe (no signal delivered): success = alive; ESRCH = dead;
+ *  EPERM = alive but untouchable. */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
- * Per-session mutex. acquires a lockfile by writing a marker and verifying
- * ownership. Returns a release function. Throws if the session is already busy.
+ * Per-session mutex. Acquires a lockfile tagged with the owner PID. Returns a
+ * release function. Throws if the session is already busy.
  *
- * This is advisory, single-process-safe (sufficient because all orbit_send
- * calls route through one Pi extension process). For multi-process safety,
- * upgrade to flock; not needed for the current single-process model.
+ * Orphan-safe: a leftover lock whose owner PID is no longer alive (process
+ * crash/SIGKILL mid-job) is pruned and reclaimed, so a crash cannot deadlock a
+ * session across restarts. Advisory and single-process-safe (all orbit_send
+ * calls route through one Pi extension process); upgrade to flock only if a
+ * multi-process model is ever adopted.
  */
 export function acquireSessionLock(
   name: string,
@@ -228,10 +255,27 @@ export function acquireSessionLock(
 ): () => void {
   const lockFile = sessionLockPath(name, home);
   if (existsSync(lockFile)) {
-    throw new OrbitError(
-      `Session ${safeName(name)} is busy with an active job. Wait for it to finish before sending again or steering.`,
-      { lockFile },
-    );
+    // A lock exists. If its owner is still alive, the session is genuinely
+    // busy; if the owner is dead (crash mid-job) or the PID is unreadable, the
+    // lock is orphaned -> prune it and reclaim.
+    let ownerAlive = false;
+    try {
+      const ownerPid = Number.parseInt(readFileSync(lockFile, "utf8").trim(), 10);
+      ownerAlive = Number.isInteger(ownerPid) && isPidAlive(ownerPid);
+    } catch {
+      ownerAlive = false;
+    }
+    if (ownerAlive) {
+      throw new OrbitError(
+        `Session ${safeName(name)} is busy with an active job. Wait for it to finish before sending again or steering.`,
+        { lockFile },
+      );
+    }
+    try {
+      unlinkSync(lockFile);
+    } catch {
+      // best-effort; fall through and re-acquire
+    }
   }
   writeFileSync(lockFile, String(process.pid));
   return () => {
