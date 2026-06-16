@@ -16,7 +16,7 @@
 // toolCall.* and conversationId). This is the single source of truth for the
 // canonical schema; the extension only READS the resulting JSONL.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -149,6 +149,18 @@ function main() {
   const file = jobId
     ? path.join(home, "events", `${jobId}.jsonl`)
     : path.join(home, "events", "unattributed.jsonl");
+  // Bound the unattributed log: it is debugging-only and never consumed. If it
+  // exceeds 1 MB, drop the older half before appending so it cannot grow forever.
+  if (!jobId && existsSync(file)) {
+    try {
+      if (statSync(file).size > 1_000_000) {
+        const lines = readFileSync(file, "utf8").split("\n");
+        writeFileSync(file, lines.slice(Math.floor(lines.length / 2)).join("\n"));
+      }
+    } catch {
+      // Best-effort truncation.
+    }
+  }
   appendFileSync(file, JSON.stringify(event) + "\n");
 
   // Non-blocking: tell the agent to ignore our stdout.

@@ -24,7 +24,8 @@ import path from "node:path";
 import { startSession, sendPrompt, refreshJob } from "./jobs.ts";
 import { readHookEvents } from "./hooks.ts";
 import { getJob, getSession, DEFAULT_HOME } from "./state.ts";
-import { defaultModel } from "./profiles.ts";
+import { defaultModel, getProfile } from "./profiles.ts";
+import { sessionExists, sendKeys } from "./tmux.ts";
 
 export const PROVIDER_ID = "orbitals";
 const PROVIDER_API = "orbitals-api";
@@ -72,7 +73,9 @@ function providerModel(id: string, name: string) {
 function getProviderSession(cwd: string, agent: string) {
   const key = `${path.resolve(cwd)}::${agent}`;
   const existing = providerSessions.get(key);
-  if (existing && getSession(existing.name, DEFAULT_HOME)) {
+  // Reuse only if both the state record AND the live tmux pane exist. A dead
+  // peer (crash, OOM) leaves a stale state record; fall through to re-launch.
+  if (existing && getSession(existing.name, DEFAULT_HOME) && sessionExists(getSession(existing.name, DEFAULT_HOME).tmuxSession)) {
     return existing.name;
   }
   const name = `provider-${agent}-${slug(path.basename(cwd))}`;
@@ -168,6 +171,7 @@ async function runTurn(
 
   while (Date.now() - started < timeoutMs) {
     if (options?.signal?.aborted) {
+      interruptPeer(session, agent);
       throw new Error("Request was aborted");
     }
 
@@ -189,8 +193,27 @@ async function runTurn(
       }
     }
     await sleep(pollMs);
+    // Re-check abort immediately after the sleep to cut detection lag.
+    if (options?.signal?.aborted) {
+      interruptPeer(session, agent);
+      throw new Error("Request was aborted");
+    }
   }
-  return { text: `orbit provider job ${sent.id} timed out after ${timeoutMs}ms` };
+  // M2: a timeout is an error, not a silent success. Throwing routes the stream
+  // to { type: "error" } so callers can distinguish timeout from real output.
+  interruptPeer(session, agent);
+  throw new Error(`orbit provider job ${sent.id} timed out after ${timeoutMs}ms`);
+}
+
+/** Best-effort: interrupt the peer's in-flight turn so an abort/timeout does not
+ * leave the agent running and burning resources. Never throws. */
+function interruptPeer(session: string, agent: string) {
+  try {
+    const profile = getProfile(agent as any);
+    sendKeys(session, profile.interruptKey);
+  } catch {
+    // Ignore: interrupt is best-effort.
+  }
 }
 
 function providerResponse(job: any): string {

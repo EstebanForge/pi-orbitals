@@ -133,7 +133,14 @@ export function loadState(home: string = DEFAULT_HOME): OrbitState {
   if (!existsSync(file)) {
     return { version: STATE_VERSION, sessions: {}, jobs: {} };
   }
-  const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<OrbitState>;
+  // Corrupt state.json (SIGKILL mid-write, disk error) must not crash the
+  // extension. Fall back to a fresh state rather than propagating.
+  let parsed: Partial<OrbitState>;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<OrbitState>;
+  } catch {
+    return { version: STATE_VERSION, sessions: {}, jobs: {} };
+  }
   return {
     version: parsed.version ?? STATE_VERSION,
     sessions: parsed.sessions ?? {},
@@ -179,17 +186,23 @@ export function stripAnsi(value: string): string {
 /** Read the last maxBytes of a file as utf8. */
 export function readTail(file: string, maxBytes = 64 * 1024): string {
   if (!file || !existsSync(file)) return "";
-  const stats = statSync(file);
-  const start = Math.max(0, stats.size - maxBytes);
-  const length = stats.size - start;
-  const buffer = Buffer.alloc(length);
-  const fd = openSync(file, "r");
+  // The stat/open/read window can race with orbit_kill deleting the log;
+  // never let a transient fs error propagate as an uncaught rejection.
   try {
-    readSync(fd, buffer, 0, length, start);
-  } finally {
-    closeSync(fd);
+    const stats = statSync(file);
+    const start = Math.max(0, stats.size - maxBytes);
+    const length = stats.size - start;
+    const buffer = Buffer.alloc(length);
+    const fd = openSync(file, "r");
+    try {
+      readSync(fd, buffer, 0, length, start);
+    } finally {
+      closeSync(fd);
+    }
+    return buffer.toString("utf8");
+  } catch {
+    return "";
   }
-  return buffer.toString("utf8");
 }
 
 function escapeRegExp(value: string): string {

@@ -21,14 +21,12 @@ export function recorderCommandPath(): string {
 /** Build the shell command an agent runs as a hook. */
 export function buildRecorderCommand(options: { home: string; agent: string; recorderPath?: string }): string {
   const recorder = options.recorderPath || recorderCommandPath();
-  return [
-    process.execPath,
-    recorder,
-    "--home",
-    options.home,
-  ]
+  // Env var MUST prefix the command: placed after the binary it becomes an
+  // argv positional, never an env var, and process.env.ORBIT_HOOK_AGENT is unset.
+  const command = [process.execPath, recorder, "--home", options.home]
     .map(shellQuote)
-    .join(" ") + ` ORBIT_HOOK_AGENT=${options.agent}`;
+    .join(" ");
+  return `ORBIT_HOOK_AGENT=${shellQuote(options.agent)} ${command}`;
 }
 
 /** Extract an orbit job id from arbitrary text (prompt, transcript). */

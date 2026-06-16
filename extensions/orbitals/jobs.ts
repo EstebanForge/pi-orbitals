@@ -82,11 +82,14 @@ export function discoverAgentsMd(cwd: string): string[] {
   const home = os.homedir();
   const files: string[] = [];
   let current = start;
+  let depth = 0;
   while (true) {
     const candidate = path.join(current, "AGENTS.md");
     if (existsSync(candidate)) files.push(candidate);
     const parent = path.dirname(current);
-    if (current === parent || current === home) break;
+    // Stop at filesystem root, home, or a sane depth cap (stray AGENTS.md under
+    // system paths when the project lives outside home).
+    if (current === parent || current === home || ++depth > 20) break;
     current = parent;
   }
   return files.reverse();
@@ -297,7 +300,9 @@ export function makeJob(opts: {
   }
   const id = randomUUID();
   const promptPath = path.join(home, "jobs", `${id}.prompt.txt`);
-  const doneRoot = path.resolve(path.join(session.cwd, ".orbit", "jobs"));
+  // Done files live under ORBIT_HOME (not the project cwd) so peer turns do not
+  // pollute the user's repo with an untracked .orbit/ directory.
+  const doneRoot = path.join(home, "jobs");
   mkdirSync(doneRoot, { recursive: true });
   const donePath = path.join(doneRoot, `${id}.done.json`);
   const promptText = buildPrompt({
@@ -349,9 +354,13 @@ export function refreshJob(job: JobRecord, home: string = DEFAULT_HOME): JobReco
   const profile = getProfile(job.agent);
   const tail = readTail(job.logPath, 256 * 1024);
   const cleanTail = stripAnsi(tail);
-  const markerPattern = new RegExp(`ORBIT_DONE:\\s*${escapeRegExp(job.id)}`);
-  const markerSeen =
-    cleanTail.includes(job.marker) || markerPattern.test(cleanTail);
+  // Require the marker on its own line. The prompt instructions contain the
+  // literal `ORBIT_DONE:<id>` mid-line ("...response: ORBIT_DONE:<id>"); a
+  // cold-start raw paste can echo that into the pane. Anchoring to line start
+  // (the agent emits the marker standalone per the protocol) avoids false
+  // positives while still matching real completion.
+  const markerPattern = new RegExp(`(^|\\n)ORBIT_DONE:\\s*${escapeRegExp(job.id)}(\\r?\\n|$)`);
+  const markerSeen = markerPattern.test(cleanTail);
   const doneFile = readDoneFile(job.donePath);
   const paneText = stripAnsi(readTail(job.logPath, 8 * 1024));
   const idle = profile.idlePattern.test(paneText);
