@@ -6,6 +6,14 @@ Interactive TUI mode rides the flat subscription quota. Headless `-p` mode bills
 
 > Status: Phases 1 to 3 done and verified: agent-agnostic delegation (1), hook bridge / structured events (2), and the Pi provider (3). See [PLAN.md](./PLAN.md).
 
+## Agent status
+
+| Agent | Status | Basis |
+| --- | --- | --- |
+| **claude** | Verified | Full end-to-end runs: delegation, hook events, provider |
+| **codex** | Ready | Launch flags + idle markers calibrated against the installed binary; code path identical to claude. Live end-to-end run pending an API-quota reset (rate-limited at implementation time) |
+| **agy** | Partial | Launch + idle/interrupt markers calibrated; hook-field normalization unit-tested. Full delegation/provider run + a command-approval workaround still pending (agy's bypass flag does not cover its command-approval prompts) |
+
 ## Install
 
 ```
