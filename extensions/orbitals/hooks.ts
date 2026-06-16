@@ -19,14 +19,16 @@ export function recorderCommandPath(): string {
 }
 
 /** Build the shell command an agent runs as a hook. */
-export function buildRecorderCommand(options: { home: string; agent: string; recorderPath?: string }): string {
+export function buildRecorderCommand(options: { home: string; agent: string; recorderPath?: string; event?: string }): string {
   const recorder = options.recorderPath || recorderCommandPath();
-  // Env var MUST prefix the command: placed after the binary it becomes an
-  // argv positional, never an env var, and process.env.ORBIT_HOOK_AGENT is unset.
+  // Env vars MUST prefix the command: placed after the binary they become argv
+  // positionals, never env vars. ORBIT_HOOK_EVENT tags the event for agents
+  // whose payload omits it (agy); ORBIT_HOOK_AGENT identifies the agent.
   const command = [process.execPath, recorder, "--home", options.home]
     .map(shellQuote)
     .join(" ");
-  return `ORBIT_HOOK_AGENT=${shellQuote(options.agent)} ${command}`;
+  const eventPrefix = options.event ? `ORBIT_HOOK_EVENT=${shellQuote(options.event)} ` : "";
+  return `${eventPrefix}ORBIT_HOOK_AGENT=${shellQuote(options.agent)} ${command}`;
 }
 
 /** Extract an orbit job id from arbitrary text (prompt, transcript). */
@@ -139,21 +141,20 @@ export function buildAgyHooksConfig(options: {
   projectDir?: string;
   recorderPath?: string;
 }): HookConfigResult {
-  const command = buildRecorderCommand({
-    home: options.home,
-    agent: "agy",
-    recorderPath: options.recorderPath,
-  });
   const configPath =
     options.scope === "project" && options.projectDir
       ? path.join(options.projectDir, ".agents", "hooks.json")
       : path.join(os.homedir(), ".gemini", "config", "hooks.json");
   mkdirSync(path.dirname(configPath), { recursive: true });
+  // agy's hook payload omits the event name, so tag each matcher with the event
+  // via ORBIT_HOOK_EVENT (the recorder prefers it over the absent payload field).
+  const cmd = (event: string) =>
+    buildRecorderCommand({ home: options.home, agent: "agy", recorderPath: options.recorderPath, event });
   const config = {
     "orbit-recorder": {
-      PreToolUse: [{ matcher: "run_command|write_to_file|replace_file_content", hooks: [{ type: "command", command }] }],
-      PostToolUse: [{ matcher: "run_command|write_to_file|replace_file_content", hooks: [{ type: "command", command }] }],
-      Stop: [{ hooks: [{ type: "command", command }] }],
+      PreToolUse: [{ matcher: "run_command|write_to_file|replace_file_content", hooks: [{ type: "command", command: cmd("PreToolUse") }] }],
+      PostToolUse: [{ matcher: "run_command|write_to_file|replace_file_content", hooks: [{ type: "command", command: cmd("PostToolUse") }] }],
+      Stop: [{ hooks: [{ type: "command", command: cmd("Stop") }] }],
     },
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2));

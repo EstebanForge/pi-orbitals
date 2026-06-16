@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-ai";
 import path from "node:path";
 
-import { startSession, sendPrompt, refreshJob } from "./jobs.ts";
+import { startSession, sendPrompt, refreshJob, answerMidTurnDialog } from "./jobs.ts";
 import { readHookEvents } from "./hooks.ts";
 import { getJob, getSession, DEFAULT_HOME } from "./state.ts";
 import { defaultModel, getProfile } from "./profiles.ts";
@@ -160,6 +160,7 @@ async function runTurn(
     wait: false,
     home: DEFAULT_HOME,
   });
+  const tmuxSession = getSession(session, DEFAULT_HOME).tmuxSession;
 
   // Poll hook events for thinking deltas until the job completes.
   const timeoutMs = Number(process.env.ORBIT_PROVIDER_TIMEOUT_MS ?? 20 * 60 * 1000);
@@ -191,6 +192,12 @@ async function runTurn(
       if (Date.now() - doneFirstSeen >= settleMs) {
         return { text: providerResponse(job) };
       }
+    }
+    // Answer a post-paste dialog (codex rate-limit switch, agy command-approval)
+    // so the turn can proceed instead of streaming to a timeout.
+    if (answerMidTurnDialog(getProfile(agent as any), tmuxSession)) {
+      await sleep(pollMs);
+      continue;
     }
     await sleep(pollMs);
     // Re-check abort immediately after the sleep to cut detection lag.

@@ -20,42 +20,26 @@
 | **codex** | READY (marked per Esteban) — calibrated against binary; never live-tested due to **API quota wall until Jul 4 2026** (not a code issue) |
 | **agy** | PARTIAL — **the open work, see below** |
 
-## ═══ CURRENT TASK: fix agy (in progress, NOTHING committed yet) ═══
+## ═══ agy work COMPLETED (2026-06-15, tested locally on macOS) ═══
 
-### Finding 1 — `--dangerously-skip-permissions` does NOT make agy unattended-safe
-Empirically confirmed: launching `agy -i --dangerously-skip-permissions` STILL shows a command-execution prompt:
-```
-● Bash(mcp-cli-ent)
-Requesting permission for: mcp-cli-ent
-Do you want to proceed?
-> 1. Yes  2. Yes, and always allow (conversation)  3. ... (Persist to settings.json)  4. No
-```
-The flag says "auto-approve all tool permission requests" but does NOT cover the terminal/command-execution gate. This hangs unattended runs.
+All 5 original findings resolved + 2 additional fixes surfaced via local e2e testing. `npm run ci` GREEN (19 tests). Nothing committed yet (6 files changed).
 
-### Finding 2 — the fix (from docs + empirically verified)
-Docs (https://antigravity.google/docs/cli-reference, fetched via agent-browser since the page is JS-rendered) define a `toolPermission` setting in `~/.gemini/antigravity-cli/settings.json`:
-- `"request-review"` (default, prompts for write/bash/web)
-- `"proceed-in-sandbox"`
-- **`"always-proceed"` (never prompts)** ← the fix
-- `"strict"`
+### Test results (provider path `pi --model orbitals/<agent> -e . -p "reply PONG"`)
+- **claude** — WORKS. Clean 37-byte reply via done.json. (Before: noisy logTail; see fix #3.)
+- **agy** — WORKS for focused turns (clean PONG). Hooks now correct (F5 fixed).
+- **codex** — mechanism PROVEN (launch, trust dialog, prompt delivery all work) but CANNOT complete a turn: `gpt-5.1` returns HTTP 400 ("not supported when using Codex with a ChatGPT account"); `gpt-5.4-mini` accepted but account usage-limited until ~Jul 3 2026. Environmental, not code. codex also auto-updated 0.139.0→0.140.0 mid-launch (hasSession crash detection caught it correctly → "died during readiness check").
 
-Plus `artifactReviewPolicy` (code-review gate): set to **`"always-proceed"`** too.
-Also `/permissions` slash command switches presets. Only launch-override flags are `--sandbox` and `--dangerously-skip-permissions` (neither fully covers it).
+### Fixes applied (trace to a confirmed failure)
+1. **codex trustPattern** (`profiles.ts`) — 0.139.0/0.140.0 trust text ("Do you trust the contents of this directory? ... Press enter to continue") didn't match the old pattern → dialog not dismissed → footer false-matched idlePattern → paste swallowed → 290s timeout. Fixed + VALIDATED (prompt now lands in pane).
+2. **agy defaultModel** (`profiles.ts`) — `"gemini-2.5-pro"` (invalid) → `"Gemini 3.5 Flash (Low)"`. CAVEAT: agy's settings.json `model` field OVERRIDES `--model`, so this is cosmetic (agy uses its global Medium).
+3. **done.json unconditional** (`jobs.ts` buildPrompt) — was conditional ("if you used tools") → claude skipped it for tool-less replies → provider `providerResponse()` fell back to noisy `job.logTail`. Made unconditional → claude now writes it → clean output. Biggest provider-quality win.
+4. **agy hook recorder F5** (`hooks.ts` + `bin/orbit-hook.mjs`) — agy payload OMITS the event-name field → `hookEventName:"unknown"`. Fix: `buildAgyHooksConfig` tags each matcher with `ORBIT_HOOK_EVENT` env; recorder prefers env over payload field. VALIDATED: real agy events now show PreToolUse/PostToolUse. codex/claude unaffected (payloads include the field).
 
-**Verified:** I wrote `toolPermission:"always-proceed"` + `artifactReviewPolicy:"always-proceed"` to settings.json, launched agy — it ran the startup workflow (ListDir, Read) with **ZERO prompts** and reached idle `>` + `? for shortcuts`. Then I restored the user's original settings. **User settings are currently clean/restored (confirmed: no always-proceed keys).**
+### agy permission (F1/2/3) — RESOLVED as document-only
+REVISED understanding: agy 1.0.x uses a granular `permissions.allow` allowlist + `trustedWorkspaces` (NOT the `toolPermission:always-proceed` the old Findings 2/3 assumed). Esteban's `~/.gemini/antigravity-cli/settings.json` already allowlists `mcp-cli-ent`, git, make, etc. File ops + allowlisted Bash run unattended (proven). Only UNLISTED Bash prompts — reproduced live: agy ran `npm test` (not in allowlist) → "Requesting permission" → stuck → timeout. **XDG_CONFIG_HOME isolation RULED OUT** (empirically: agy still read ~/.gemini). Decision (Esteban, 2026-06-15): document-only, keep `--dangerously-skip-permissions`. Documented in README "agy permissions" section.
 
-### Finding 3 — the catch (decision needed, was about to ask Esteban)
-agy settings.json is **USER-GLOBAL** (`~/.gemini/antigravity-cli/settings.json`). No per-session flag works, no project-scope, no env var documented. Options:
-1. **Backup user settings.json → merge always-proceed on `orbit_start` → restore on `orbit_kill`.** Crash-risk: if Pi dies between, user's global agy is left in always-proceed. Session outlives a single Pi call, so restore timing is fiddly.
-2. **Document only; require user to set it themselves.** Honest, no side-effects, agy stays "manual setup required" out-of-box.
-3. **Leave global always-proceed permanently.** Simplest but invasive (affects interactive agy too).
-4. **Check if agy honors a config-dir/HOME env var** (e.g. `GEMINI_HOME` or `XDG`) to isolate an orbit-specific settings.json. NOT yet checked — **try this first** (`env | grep`, `agy install --help`, or strace the settings read). Cleanest if it works.
-
-### Finding 4 — `defaultModel("agy")` is WRONG (separate bug)
-`profiles.ts` `defaultModel("agy")` returns `"gemini-2.5-pro"` — **invalid**. `agy models` lists real names WITH spaces/parens: `Gemini 3.5 Flash (Low|Medium|High)`, `Gemini 3.1 Pro (Low|High)`. Fix to e.g. `"Gemini 3.5 Flash (Low)"`. Note: shell-quoting handles spaces fine (`agy --model 'Gemini 3.5 Flash (Low)'` works — confirmed in banner). `ORBIT_AGY_MODEL` env override should also default to a valid name.
-
-### Finding 5 — agy hook recorder may be broken too (NEEDS VERIFICATION)
-During the agy provider test, events showed `hookEventName:"unknown"`. EITHER the agy hook payload shape (agy 1.0.8) differs from what `bin/orbit-hook.mjs`'s normalizer expects, OR the `ls -t` grabbed a stale file. **Not yet isolated.** Check `buildAgyHooksConfig` (writes `.agents/hooks.json` in project cwd) is actually loaded by agy, and capture a real agy hook payload to compare against the normalizer. agy idle/events smoke used `toolCall.name`/`toolCall.args` shape — confirm against 1.0.8.
+### External research (4 sources, for reference)
+Evaluated openclaw/openclaw + firecrawl/openclaw `skills/tmux`, tmuxcheatsheet openclaw-tmux-setup article, cosformula/resilient-coding-agent-skill. Net: pi-orbitals is strictly ahead of all (already has capture-pane -J, pre-paste ready gate `groomSession`, paste-buffer, marker+done.json). Two borrowable ideas surfaced but deferred per surgical principle (neither traces to a confirmed failure after the trustPattern fix): shell-prompt-return crash detection (unreliable here — depends on unknown zsh prompt format, `>` collides with agy idle; existing hasSession detection already caught the codex auto-update death) and codex/agy read-back verify (not needed — delivery works now; existing `orbit job <id>` signature infra exists if needed later).
 
 ## Key gotchas (don't re-discover these)
 - **streamSimple must be SYNC** returning the stream; push events async via an IIFE. Async→Promise fails the type.
@@ -72,12 +56,10 @@ During the agy provider test, events showed `hookEventName:"unknown"`. EITHER th
 org: `@estebanforge/*` scoped npm, raw-TS no-build, MIT, AGENTS.md + CLAUDE.md/GEMINI.md symlinks. Peer-reviewed plans before implementation.
 
 ## Memory
-7 facts in agentmemory (cross-session): Phase 3 provider bug, agent-readiness decision, migration decision, type-stripping resolution, TUI smoke calibration, org extension house-style, local typecheck gotcha. **Search memory first** (`memory_search "pi-orbitals"`).
+12+ facts in agentmemory (cross-session). Original 7: Phase 3 provider bug, agent-readiness decision, migration decision, type-stripping resolution, TUI smoke calibration, org extension house-style, local typecheck gotcha. Added 2026-06-15: done.json conditional bug+fix, codex gpt-5.1/quota characterization, agy allowlist permission model (XDG ruled out), agy F5 hook fix, agy permission wall reproduced. **Search memory first** (`memory_search "pi-orbitals"`).
 
 ## Suggested next steps (in order)
-1. Check if agy honors a config-dir/HOME env var (Finding 3 option 4) — cleanest fix if it exists.
-2. Pick the agy permission approach with Esteban (global settings.json side-effect is a real decision).
-3. Fix `defaultModel("agy")` to a valid model name (Finding 4).
-4. Verify + fix the agy hook recorder payload shape (Finding 5) — capture a real agy hook event.
-5. Run a full agy e2e (delegation + hooks + provider) to flip agy to VERIFIED.
-6. Codex can't be tested until Jul 4 2026 (quota).
+1. **Commit** the 6 changed files (`profiles.ts`, `jobs.ts`, `hooks.ts`, `bin/orbit-hook.mjs`, `test/orbitals.test.ts`, `README.md`) + this handoff update.
+2. **codex full e2e** — re-run after ~Jul 3 2026 quota reset; also investigate `SessionStart hook failed: exit code 127` (command-not-found when codex runs the recorder hook; unverifiable while quota-blocked).
+3. **agy provider prompt** (optional, low priority) — tighten `buildProviderPrompt` so agy doesn't run exploratory repo commands on trivial turns (reduces unlisted-command wall hits).
+4. Consider codex `defaultModel` = `gpt-5.4-mini` for ChatGPT-account users, or document that an API key + `gpt-5.1` is required.

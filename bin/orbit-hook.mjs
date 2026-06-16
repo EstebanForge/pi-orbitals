@@ -79,8 +79,14 @@ function agentSessionId(payload) {
 
 // Normalize an agent hook payload to the canonical orbit event schema.
 function normalize(agent, payload) {
+  // agy's hook payload has no event-name field; the per-matcher ORBIT_HOOK_EVENT
+  // env (set in buildAgyHooksConfig) identifies the event. Agents that include
+  // the field (claude/codex) resolve via payload when the env is unset.
   const hookEventName =
-    payload.hook_event_name || payload.hookEventName || "unknown";
+    process.env.ORBIT_HOOK_EVENT ||
+    payload.hook_event_name ||
+    payload.hookEventName ||
+    "unknown";
   const sessionId = agentSessionId(payload);
   let toolName;
   let toolInput;

@@ -280,8 +280,8 @@ export function buildPrompt(opts: {
     "Do your work, then finish.",
     `When fully done, include one completion marker line in your final response: ${marker}`,
     "Do not add spaces, quotes, or punctuation to the marker line.",
-    `If you used tools or changed files, also create this JSON file before the final response: ${opts.donePath}`,
-    "The JSON may contain status, summary, final_response, files_changed, and notes.",
+    `Before your final response, create this JSON file: ${opts.donePath}`,
+    "The JSON must include final_response (your exact reply to show the user); it may also include status, summary, files_changed, and notes.",
     "</orbit_completion_protocol>",
   ].join("\n");
 }
@@ -393,6 +393,19 @@ export function sendJob(
 }
 
 /**
+ * Answer a post-paste interactive dialog the agent surfaces mid-turn (codex
+ * rate-limit/switch prompt, agy command-approval). Returns true if the profile
+ * answered one (caller should settle before re-checking completion). Pre-paste
+ * dialogs are handled by prepareSessionForInput; this covers the same dialogs
+ * when they appear AFTER the prompt is delivered.
+ */
+export function answerMidTurnDialog(profile: AgentProfile, tmuxSession: string): boolean {
+  if (!profile.handleMidTurnDialog) return false;
+  const text = capturePaneClean(tmuxSession, { lines: 40 });
+  return profile.handleMidTurnDialog(text, (keys: string) => sendKeys(tmuxSession, keys)) === true;
+}
+
+/**
  * Wait for a sent job to complete. Completion floor order:
  *   marker OR done-file OR idle TUI pattern (per agent profile).
  * Crashes detected via hasSession -> failed status.
@@ -428,6 +441,12 @@ export async function waitForJob(
       // Idle pattern is the floor: agent is waiting for input = turn done.
       updateJobStatus(id, "done", home);
       return toResult(refreshJob(getJob(id, home), home));
+    }
+    // Answer a post-paste interactive dialog (codex rate-limit switch, agy
+    // command-approval) so the turn continues instead of hanging to timeout.
+    if (answerMidTurnDialog(getProfile(job.agent), job.tmuxSession)) {
+      await sleepAsync(1500);
+      continue;
     }
     await sleepAsync(pollMs);
   }

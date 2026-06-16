@@ -96,6 +96,37 @@ test("profiles mark codex/agy as native AGENTS.md readers", () => {
   assert.equal(getProfile("agy").agentsMd, "native");
 });
 
+test("handleMidTurnDialog is opt-in (claude none; codex/agy answer their dialogs)", () => {
+  // claude has no post-paste dialog handler.
+  assert.equal(getProfile("claude").handleMidTurnDialog, undefined);
+
+  // codex: confirm the rate-limit model-switch dialog (option 1).
+  const codex = getProfile("codex").handleMidTurnDialog!;
+  const sentCodex: string[] = [];
+  const sendCodex = (k: string) => { sentCodex.push(k); };
+  assert.equal(
+    codex("Approaching rate limits\nSwitch to gpt-5.4-mini for lower credit?\nPress enter to confirm or esc to go back", sendCodex),
+    true,
+  );
+  assert.deepEqual(sentCodex, ["C-m"]);
+  sentCodex.length = 0;
+  assert.equal(codex("thinking about the task", sendCodex), false);
+  assert.deepEqual(sentCodex, []);
+
+  // agy: answer command-approval with option 2 (always this conversation) + Enter.
+  const agy = getProfile("agy").handleMidTurnDialog!;
+  const sentAgy: string[] = [];
+  const sendAgy = (k: string) => { sentAgy.push(k); };
+  assert.equal(
+    agy("Requesting permission for: npm test\nDo you want to proceed?", sendAgy),
+    true,
+  );
+  assert.deepEqual(sentAgy, ["2", "C-m"]);
+  sentAgy.length = 0;
+  assert.equal(agy("? for shortcuts", sendAgy), false);
+  assert.deepEqual(sentAgy, []);
+});
+
 test("getProfile throws on unknown agent", () => {
   assert.throws(() => getProfile("nope"), /Unknown agent/);
 });
@@ -193,10 +224,10 @@ test("recorder subprocess attributes + normalizes events across agents", () => {
   const home = tempHome();
   const recorder = path.resolve("bin", "orbit-hook.mjs");
   const jobId = "33333333-3333-4333-8333-333333333333";
-  const run = (payload: object, agent: string) =>
+  const run = (payload: object, agent: string, event?: string) =>
     spawnSync(process.execPath, [recorder, "--home", home], {
       input: JSON.stringify(payload),
-      env: { ...process.env, ORBIT_HOOK_AGENT: agent },
+      env: { ...process.env, ORBIT_HOOK_AGENT: agent, ...(event ? { ORBIT_HOOK_EVENT: event } : {}) },
       encoding: "utf8",
     });
   try {
@@ -204,8 +235,9 @@ test("recorder subprocess attributes + normalizes events across agents", () => {
     run({ hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: `orbit job ${jobId}` }, "claude");
     // same session, no prompt -> auto-attributed, tool fields normalized (claude shape)
     run({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "ls" } }, "claude");
-    // agy toolCall shape, same conversationId
-    run({ hook_event_name: "PreToolUse", conversationId: "s1", toolCall: { name: "run_command", args: { CommandLine: "pwd" } } }, "agy");
+    // agy payloads omit the event name; ORBIT_HOOK_EVENT (set per-matcher in the
+    // hook config) identifies it. toolCall.* is normalized regardless.
+    run({ conversationId: "s1", toolCall: { name: "run_command", args: { CommandLine: "pwd" } } }, "agy", "PreToolUse");
 
     const page = readHookEvents(jobId, { home });
     assert.equal(page.events.length, 3);
@@ -214,6 +246,7 @@ test("recorder subprocess attributes + normalizes events across agents", () => {
     assert.equal(b.toolName, "Bash");
     assert.equal(c.toolName, "run_command"); // agy toolCall.name normalized
     assert.equal(c.toolInput.CommandLine, "pwd");
+    assert.equal(c.hookEventName, "PreToolUse"); // resolved from ORBIT_HOOK_EVENT (agy payload omits it)
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

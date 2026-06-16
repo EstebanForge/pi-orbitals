@@ -1,7 +1,46 @@
+# Dependencies
 node_modules/
-node_modules
-.cache/
+
+# Build output (no build step today; guard the future)
+dist/
+build/
+out/
 *.tsbuildinfo
-.pi/tasks/
-.pi/extensions/
+
+# Test / coverage
+coverage/
+.nyc_output/
+.cache/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env / secrets (keep the example, if any)
+.env
+.env.*
+!.env.example
+
+# OS / editor
 .DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Runtime agent state (machine-specific, regenerated per launch)
+.pi/
+.agents/
+.codex/
+.claude/
+.gemini/
+
+# Temp / backup
+*.tmp
+*.bak

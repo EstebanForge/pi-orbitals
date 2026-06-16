@@ -10,9 +10,9 @@ Interactive TUI mode rides the flat subscription quota. Headless `-p` mode bills
 
 | Agent | Status | Basis |
 | --- | --- | --- |
-| **claude** | Verified | Full end-to-end runs: delegation, hook events, provider |
-| **codex** | Ready | Launch flags + idle markers calibrated against the installed binary; code path identical to claude. Live end-to-end run pending an API-quota reset (rate-limited at implementation time) |
-| **agy** | Partial | Launch + idle/interrupt markers calibrated; hook-field normalization unit-tested. Full delegation/provider run + a command-approval workaround still pending (agy's bypass flag does not cover its command-approval prompts) |
+| **claude** | Verified | End-to-end: delegation, provider (clean reply via done.json), hook events |
+| **codex** | Mechanism verified | Launch, trust-dialog handling, and prompt delivery verified locally. Cannot complete a turn: `gpt-5.1` is rejected on ChatGPT accounts and the account is usage-limited until ~Jul 2026. Not a code issue |
+| **agy** | Provider verified | Provider delegation works (clean reply via done.json). File tools and allowlisted commands run unattended; see [agy permissions](#agy-permissions). Hook-event normalization unit-tested |
 
 ## Install
 
@@ -55,6 +55,15 @@ Each call delegates one assistant turn to a durable, reusable tmux session. Hook
 ## Security warning
 
 Peer agents are launched with bypass flags (`claude`/`agy` `--dangerously-skip-permissions`, `codex` `--dangerously-bypass-approvals-and-sandbox`) and therefore have **unrestricted read, write, and network access as the current user**. No workspace isolation is applied. This is a deliberate trade-off for unattended tmux driving. Run in a sandboxed environment (container, VM) if untrusted work is involved. `codex` hooks additionally require `--dangerously-bypass-hook-trust`.
+
+## agy permissions
+
+agy is launched with `--dangerously-skip-permissions`, which auto-approves its tool-permission requests but does **not** cover its command-execution gate. agy resolves commands against a granular allowlist in `~/.gemini/antigravity-cli/settings.json`:
+
+- **File tools** (`Read`, `Create`, `Edit`) and **allowlisted Bash commands** run unattended.
+- **Unlisted Bash commands** still prompt (`Do you want to proceed?`), which blocks unattended runs.
+
+pi-orbitals does **not** modify your global agy settings. To run a new command unattended, add it to `permissions.allow` in your settings.json (e.g. `"command(npm test)"`). This is a deliberate, side-effect-free choice: global `toolPermission: "always-proceed"` would also suppress the prompts but would change the behavior of your interactive agy sessions.
 
 ## Configuration
 
